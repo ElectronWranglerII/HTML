@@ -1,0 +1,830 @@
+<html>
+	<head>
+		<title>
+			Data Tool
+		</title>
+		<meta http-equiv="content-type" content="text/html; charset=UTF-8" >
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<script src="https://www.ixeelectronics.com/js/di914.js"></script>
+		<script src="https://www.ixeelectronics.com/js/ui/modal.js"></script>
+		<script src="https://www.ixeelectronics.com/js/ui/contextmenu.js"></script>
+		<script src="https://www.ixeelectronics.com/js/graphics/Line2D.js"></script>
+	</head> 
+	<body onload="Main()">
+<script>
+const ModeString = ["Recorded", "Playback", "Live"];
+const PlotDataData =	0;
+const PlotDataScaleX =	1;
+const PlotDataScaleY =	2;
+const PlotDataMinX =	5;
+const PlotDataMaxX =	6;
+const PlotDataMinY =	7;
+const PlotDataMaxY =	8;
+const PlotDataColorR =	9;
+const PlotDataColorG =	10;
+const PlotDataColorB =	11;
+
+var DataLoaded = false;
+var Update = true;
+var Canvas;
+var CanvasGraphMouse = false;
+var	DataList = [];
+var PlotData = [];
+var ElementColumnSelect;
+var Context;
+var UpdateIntervalID;
+var Mode = 0;
+var MouseX;
+var MouseY;
+var PlaybackEnable = false;
+var PlaybackInterval;
+var PlaybackTime = 0;
+var PlaybackSpeed = 1;
+var RecordedData;
+var LiveData;
+var StepIndex = 0;
+var Time = [];
+let MinX = 0;
+let MaxX = 0;
+let Delta = 0;
+let DeltaX = 0;
+let MinY = 0;
+let MaxY = 0;
+let DeltaY = 0;
+
+function Main(){
+	Canvas = document.getElementById("CanvasGraph");
+	Context = Canvas.getContext("2d");
+	UpdateIntervalID = setInterval(DrawFrame, 33);
+}
+
+function DrawFrame(){
+	if(DataLoaded){
+		if(Update && DataList.length > 0){
+			Context.clearRect(0, 0, Canvas.width, Canvas.height);
+			document.getElementById("PlaybackTime").innerHTML = "";
+			document.getElementById("BoundsDisplay").innerHTML = "";
+			document.getElementById("ScaleDisplay").innerHTML = "";
+			switch(ModeString[Mode]){
+				case "Playback":
+					Time = LiveData.Column(LiveData.ColumnIndex("Time (UTC)"));
+					PlotData.length = 0;
+					for(let i = 0; i < DataList.length; i++){
+						PlotData.push([LiveData.Column(DataList[i]), 1, 1, false, false, 0, 0, 0, 0, 0, 0, 0]);
+					}
+					break;
+				case "Recorded":
+					Time = RecordedData.Column(RecordedData.ColumnIndex("Time (UTC)"));
+					PlotData.length = 0;
+					for(let i = 0; i < DataList.length; i++){
+						PlotData.push([RecordedData.Column(DataList[i]), 1, 1, false, false, 0, 0, 0, 0, 0, 0, 0]);
+					}
+					break;
+				default:
+					break;
+			}
+			
+			for(let i = 0; i < Time.length; i++){
+				let TimeElement = Time[i].split(":");
+				Time[i] = (parseInt(TimeElement[0]) * 3600 + parseInt(TimeElement[1]) * 60 + parseInt(TimeElement[2].split(".")[0])) * 1000 + parseInt(TimeElement[2].split(".")[1]);
+			}
+			Delta = [0];
+			for(let i = 0; i < Time.length - 1; i++){
+				Delta.push(Time[i + 1] - Time[i]);
+			}
+			for(let i = 0; i < Time.length; i++){
+				if(Time[i] < MinX){
+					MinX = Time[i];
+				}
+				if(Time[i] > MaxX){
+					MaxX = Time[i];
+				}
+			}
+			DeltaX = MaxX - MinX;
+			
+			//Determine the minimum and maximum data values for the graph
+			//Also determine the bounds of each data column
+			MinY = Infinity;
+			MaxY = -Infinity;
+			for(let i = 0; i < PlotData.length; i++){
+				PlotData[i][PlotDataMinY] = parseFloat(PlotData[i][PlotDataData][0]);
+				PlotData[i][PlotDataMaxY] = parseFloat(PlotData[i][PlotDataData][0]);
+				for(let j = 0; j < PlotData[i][PlotDataData].length; j++){
+					PlotData[i][PlotDataData][j] = parseFloat(PlotData[i][PlotDataData][j]);
+					//
+					if(PlotData[i][PlotDataData][j] < MinY){
+						MinY = PlotData[i][PlotDataData][j];
+					}
+					if(PlotData[i][PlotDataData][j] > MaxY){
+						MaxY = PlotData[i][PlotDataData][j];
+					}
+					//Determine Y bounds
+					if(PlotData[i][PlotDataData][j] < PlotData[i][PlotDataMinY]){
+						PlotData[i][PlotDataMinY] = PlotData[i][PlotDataData][j];
+					}
+					if(PlotData[i][PlotDataData][j] > PlotData[i][PlotDataMaxY]){
+						PlotData[i][PlotDataMaxY] = PlotData[i][PlotDataData][j];
+					}
+				}
+			}
+			
+			DeltaY = MaxY - MinY;
+			if(MinY > 0){
+				OffsetY = 0;
+			}else{
+				OffsetY = -MinY;
+			}
+			
+			ScaleX = (Canvas.width - 20) / Time.length;
+			ScaleY = (Canvas.height - 20) / DeltaY;
+
+			document.getElementById("PlaybackTime").innerHTML = "Playback Time: " + (PlaybackTime / 1000).toFixed(3) + "s";
+			document.getElementById("BoundsDisplay").innerHTML = "Data Bounds: " + MinY.toFixed(3) + ", " + MaxY.toFixed(3);
+			document.getElementById("ScaleDisplay").innerHTML = "Graph Scaling: " + ScaleX.toFixed(3) + ", " + ScaleY.toFixed(3);
+			
+			//Calculate graph grid parameters
+			let DeltaXScale = Math.pow(10, -Math.ceil(Math.log10(Time.length)) + 1);
+			let GridXIntervalCount = Math.ceil(Time.length * DeltaXScale);
+			let DeltaYScale = Math.pow(10, -Math.ceil(Math.log10(DeltaY)) + 1);
+			let GridYIntervalCount = Math.ceil(DeltaY * DeltaYScale);
+			
+			console.log(DeltaX + ", " + DeltaY);
+			console.log(GridXIntervalCount + ", " + GridYIntervalCount);
+			
+			//Draw graph grid
+			Grid.DrawXLinear(Context, 0, 0, 0, GridXIntervalCount, 600, 1900, false);
+			Grid.DrawYLinear(Context, 0, 0, 0, GridYIntervalCount, 1900, 600, false);
+			//Draw graph data
+			for(let i = 0; i < PlotData.length; i++){
+				DrawLine(PlotData[i], ScaleX, ScaleY, OffsetY);
+			}
+
+			Update = false;
+		}
+	}
+}
+
+function DrawLine(Data, ScaleX, ScaleY, OffsetY){
+	let CanvasBottom = Canvas.height - 10;
+	Canvas.strokeStyle = "rgb(" + Data[PlotDataColorR] + ", " + Data[PlotDataColorG] + ", " + Data[PlotDataColorB] + ")";
+	Context.lineWidth = 1;
+	if(ScaleX <= 0.5 && ScaleY <= 0.5){
+		for(let i = 0; i < Data[0].length; i++){
+			let X = (Data[1] * ScaleX) * i + 10;
+			let Y = CanvasBottom - (Data[2] * ScaleY) * (Data[0][i] + OffsetY);
+				Context.beginPath();
+				Context.arc(X, Y, 0.25, 0, Math.PI * 2);
+				Context.stroke();
+		}
+	}else{
+		let X = (Data[1] * ScaleX) + 10;
+		let Y = CanvasBottom - (Data[2] * ScaleY) * (Data[0][0] + OffsetY);
+		Context.beginPath();
+		Context.moveTo(X, Y);
+		for(let i = 1; i < Data[0].length; i++){
+			let X = (Data[1] * ScaleX) * i + 10;
+			let Y = CanvasBottom - (Data[2] * ScaleY) * (Data[0][i] + OffsetY);
+			Context.lineTo(X, Y);
+		}
+		Context.stroke();
+	}
+}
+
+class DI914{
+	static ColumnName = [	"Date",
+							"Time (UTC)",
+							"dTime",
+							"Az Actual",
+							"El Actual",
+							"Az Cmd",
+							"El Cmd",
+							"Refrac",
+							"PlusCount",
+							"Az Vel",
+							"El Vel",
+							"Az Acc",
+							"El Acc",
+							"Az Mode",
+							"El Mode",
+							"Srch",
+							"Acq",
+							"Sel Rx",
+							"LHC7 dB",
+							"LHC7 V",
+							"CMB7 dB",
+							"CMB7 V",
+							"RHC7 dB",
+							"RHC7 V",
+							"LHC8 dB",
+							"LHC8 V",
+							"CMB8 dB",
+							"CMB8 V",
+							"RHC8 dB",
+							"RHC8 V",
+							"DmdAzD",
+							"DmdAzV",
+							"DmdElD",
+							"DmdElV",
+							"LimAz",
+							"LimEl",
+							"NominaAz",
+							"NominaEl",
+							"NominaRn",
+							"LaunchInd",
+							"LnchMode",
+							"HSD1_Az",
+							"HSD1_El",
+							"HSD1_Q",
+							"HSD1_T",
+							"HSD1_SID",
+							"HSD1_Ltnc",
+							"HSD2_Az",
+							"HSD2_El",
+							"HSD2_Q",
+							"HSD2_T",
+							"HSD2_SID",
+							"HSD2_Ltnc",
+							"HSD3_Az",
+							"HSD3_El",
+							"HSD3_Q",
+							"HSD3_T",
+							"HSD3_SID",
+							"HSD3_Ltnc",
+							"HSD4_Az",
+							"HSD4_El",
+							"HSD4_Q",
+							"HSD4_T",
+							"HSD4_SID",
+							"HSD4_Ltnc",
+							"PrevAz",
+							"PrevEl",
+							"DeltaAz",
+							"DeltaEl"
+						];
+	constructor(){
+		this._Site = "";
+		this._Altitude = 0;
+		this._Column = [];
+		this._Data = [];
+		this._Latitude = 0;
+		this._Longitude = 0;
+	}
+	
+	Altitude(){
+		return this._Altitude;
+	}
+	
+	//Returns data for the specified column
+	Column(ID){
+		if(typeof ID == "number"){
+			if(ID > -1 && ID < this._Column.length){
+				let ColumnData = [];
+				for(let i = 0; i < this._Data.length; i++){
+					ColumnData.push(this._Data[i][ID]);
+				}
+				return ColumnData;
+			}
+		}else if(typeof ID == "string"){
+			for(let i = 0; i < this._Column.length; i++){
+				if(this._Column[i] == ID){
+					let ColumnData = [];
+					for(let j = 0; j < this._Data.length; j++){
+						ColumnData.push(this._Data[j][i]);
+					}
+					return ColumnData;
+				}
+			}
+		}
+		return null;
+	}
+	
+	ColumnCount(){
+		return this._Column.length;
+	}
+	
+	//Returns the index of the column specified by ID
+	ColumnIndex(ID){
+		for(let i = 0; i < this._Column.length; i++){
+			if(this._Column[i] == ID){
+				return i;
+			}
+		}
+		return -1;
+	}
+	
+	ColumnList(Data){
+		if(arguments.length == 0){
+			return Array.from(this._Column);
+		}else{
+			this._Column = Data;
+		}
+	}
+	
+	ColumnName(ID){
+		if(ID > -1 && ID < this._Column.length){
+			return this._Column[ID];
+		}else{
+			return null;
+		}
+	}
+	
+	Data(){
+		return this._Data;
+	}
+	
+	Latitude(){
+		return this._Latitude;
+	}
+	
+	Longitude(){
+		return this._Longitude;
+	}
+	
+	//This function packs the object's data into a single array formatted as:
+	//[Site Name, Site Latitude, Site Longitude, Site Altitude, [Column Names], [Data]]
+	Pack(){
+		return [this._Site, this._Latitude, this._Longitude, this._Altitude, this._Column, this._Data];
+	}
+	
+	//This function parses a file into several parts which are:
+	//Site name
+	//Site latitude
+	//Site longitude
+	//Site altitude
+	//Column names for the data within the file
+	//Data
+	Parse(Data){
+		let ColumnNamesFound = false;
+		let RowData = [];
+		let DataRow = [];
+		//Split file into individual lines
+		let Line = Data.split("\n");
+		//Process each line
+		for(let i = 0; i < Line.length; i++){
+			//Is the line empty or a classification marking?
+			if(Line[i] != "" && Line[i].includes("*  *  *  *  U N C L A S S I F I E D  *  *  *  *") == false){
+				//Does the line contain the site's name?
+				if(Line[i].includes("Tracking Station:")){
+					this._Site = Line[i].split(":")[1].trim();
+				//Does the line contain the site's altitude?
+				}else if(Line[i].includes("Altitude:")){
+					this._Altitude = Line[i].split(":")[1].trim().split(" ")[0].trim();
+				//Does the line contain the site's latitude?
+				}else if(Line[i].includes("Latitude:")){
+					this._Latitude = Line[i].split(":")[1].trim();
+				//Does the line contain the site's longitude?
+				}else if(Line[i].includes("Longitude:")){
+					this._Longitude = Line[i].split(":")[1].trim();
+				//Is the line a row containing column names?
+				}else if(DI914.ColumnName.some(j => Line[i].includes(j))){
+					ColumnNamesFound = true;
+					//Split the column name row into individual column names
+					this._Column = Line[i].trim().split("\t");
+					//Remove leading and trailing whitespaces from each column name
+					for(let j = 0; j < this._Column.length; j++){
+						//Remove leading/trailing whitespaces
+						this._Column[j] = this._Column[j].trim();
+					}
+				//Assume data follows if column names have been found
+				}else if(ColumnNamesFound){
+					//Split data row into individual data elements
+					RowData = Line[i].trim().split("\t");
+					//Pack each data element into an array representing the row
+					for(let j = 0; j < RowData.length; j++){
+						DataRow.push(RowData[j].trim());
+					}
+					//Add the row to the data array
+					this._Data.push(DataRow);
+					//Clear the data row array
+					DataRow = [];
+				}
+			}
+		}
+		/*
+		console.log(this._Site);
+		console.log(this._Latitude);
+		console.log(this._Longitude);
+		console.log(this._Altitude);
+		console.log(this._Column);
+		console.log(this._Data);
+		*/
+	}
+	
+	//Returns data for the specified row
+	Row(ID){
+		if(ID < this._Data.length){
+			return this._Data[ID];
+		}
+	}
+	
+	RowCount(){
+		return this._Data.length;
+	}
+	
+	RowInsert(Data){
+		this._Data.push(Data);
+	}
+}
+
+class Grid{
+	static DrawXLinear(Context, X, Y, Start, End, Width, Height, Invert){
+		let Done = false;
+		let LineX;
+		let DivisionCount = Math.abs(End - Start);
+		let StepSize = Context.canvas.width / DivisionCount;
+		if(Invert){
+			for(let i = 0; i < DivisionCount; i++){
+				LineX = Context.canvas.width - StepSize * i;
+				if(LineX > Context.canvas.width){
+					Done = true;
+					break;
+				}else{
+					Line2D.Draw(Context, LineX, 0, LineX, Height, 0.5);
+				}
+				if(Done){
+					break;
+				}
+			}
+		}else{
+			for(let i = 0; i < DivisionCount; i++){
+				LineX = Start + StepSize * i;
+				if(LineX > Context.canvas.width){
+					Done = true;
+					break;
+				}else{
+					Line2D.Draw(Context, LineX, 0, LineX, Height, 0.5);
+				}
+				if(Done){
+					break;
+				}
+			}
+		}
+	}
+	
+	static DrawXLogarithmic(Context, X, Y, RangeStart, RangeEnd, DecadeSize, GridHeight, Invert){
+		let DecadeCount = Math.ceil(Math.log10(Math.abs(RangeEnd - RangeStart)));
+		let DecadeStart;
+		let Done = false;
+		let Width = DecadeSize / Math.log(10);
+		let LineX;
+		if(Invert){
+			for(let i = 0; i < DecadeCount; i++){
+				DecadeStart = Context.canvas.width - i * DecadeSize;
+				for(let j = 1; j < 11; j++){
+					LineX = DecadeStart - Math.round(Width * Math.log(j));
+					if(LineX < 0){
+						Done = true;
+						break;
+					}else{
+						Line2D.Draw(Context, LineX, 0, LineX, GridHeight);
+					}
+				}
+				if(Done){
+					break;
+				}
+			}
+		}else{
+			for(let i = 0; i < DecadeCount; i++){
+				DecadeStart = i * DecadeSize;
+				for(let j = 1; j < 11; j++){
+					LineX = DecadeStart + Math.round(Width * Math.log(j));
+					if(LineX > Context.canvas.width){
+						Done = true;
+						break;
+					}else{
+						Line2D.Draw(Context, LineX, 0, LineX, GridHeight);
+					}
+				}
+				if(Done){
+					break;
+				}
+			}
+		}
+	}
+	
+	static DrawYLinear(Context, X, Y, Start, End, Width, Height, Invert){
+		let Done = false;
+		let LineY;
+		let DivisionCount = Math.abs(End - Start);
+		let StepSize = Context.canvas.height / DivisionCount;
+		if(Invert){
+			for(let i = 0; i < DivisionCount; i++){
+				LineY = Context.canvas.height - StepSize * i;
+				console.log(LineY);
+				if(LineY > Context.canvas.height){
+					Done = true;
+					break;
+				}else{
+					Line2D.Draw(Context, LineY, 0, LineY, Width, 0.5);
+				}
+				if(Done){
+					break;
+				}
+			}
+		}else{
+			for(let i = 0; i < DivisionCount; i++){
+				LineY = Start + StepSize * i;
+				if(LineY > Context.canvas.height){
+					Done = true;
+					break;
+				}else{
+					Line2D.Draw(Context, 0, LineY, Width, LineY);
+				}
+				if(Done){
+					break;
+				}
+			}
+		}
+	}
+	
+	static DrawYLogarithmic(Context, X, Y, RangeStart, RangeEnd, DecadeSize, GridWidth, Invert){
+		let DecadeCount = Math.ceil(Math.log10(Math.abs(RangeEnd - RangeStart)));
+		let DecadeStart;
+		let Done = false;
+		let Height = DecadeSize / Math.log(10);
+		let LineY;
+		if(Invert){
+			for(let i = 0; i < DecadeCount; i++){
+				DecadeStart = Context.canvas.height - i * DecadeSize;
+				for(let j = 1; j < 11; j++){
+					LineY = DecadeStart - Math.round(Height * Math.log(j));
+					if(LineY < 0){
+						Done = true;
+						break;
+					}else{
+						Line2D.Draw(Context, 0, LineY, GridWidth, LineY);
+					}
+				}
+				if(Done){
+					break;
+				}
+			}
+		}else{
+			for(let i = 0; i < DecadeCount; i++){
+				DecadeStart = i * DecadeSize;
+				for(let j = 1; j < 11; j++){
+					LineY = DecadeStart + Math.round(Height * Math.log(j));
+					if(LineY > Context.canvas.height){
+						Done = true;
+						break;
+					}else{
+						Line2D.Draw(Context, 0, LineY, GridWidth, LineY);
+					}
+				}
+				if(Done){
+					break;
+				}
+			}
+		}
+	}
+	
+	static LogarithmicSize(Start, End, DecadeSize){
+		
+	}
+	
+	constructor(XType, XStart, XEnd, XWidth, XInvert, YType, YStart, YEnd, YHeight, YInvert){
+		this._XType = XType;
+		this._XStart = XStart;
+		this._XEnd = XEnd;
+		this._XWidth = XWidth;
+		this._XInvert = XInvert;
+		this._YType = YType;
+		this._YStart = YStart;
+		this._YEnd = YEnd;
+		this._YHeight = YHeight;
+		this._YInvert = YInvert;
+	}
+	
+	Draw(Context, X, Y){
+		switch(this._XType){
+			case Grid.Linear:
+				break;
+			case Grid.Logarithmic:
+				Grid.DrawXLogarithmic(Context, this._XStart, this._XEnd, this._XWidth, this._XInvert);
+				break;
+			default:
+				break;
+		}
+		switch(this._YType){
+			case Grid.Linear:
+				break;
+			case Grid.Logarithmic:
+				Grid.DrawYLogarithmic(Context, this._YStart, this._YEnd, this._YHeight, this._YInvert);
+				break;
+			default:
+				break;
+		}
+	}
+}
+
+function ButtonDataPointAdd(E){
+	let Select = document.getElementById("SelectDataPoints");
+	DataList.push(Select.options[Select.selectedIndex].text);
+	Update = true;
+}
+
+function DatabaseLoad(event){
+	DataLoaded = false;
+	PlaybackEnable = false;
+	Update = false;
+	PlotData.length = 0;
+	let input = event.target;
+	let reader = new FileReader();
+	reader.onload = function() {
+		let text = reader.result;
+		RecordedData = new DI914();
+		RecordedData.Parse(text);
+		text = null;
+		ListColumns = RecordedData.ColumnList();
+		ListColumns.sort();
+		ElementColumnSelect = document.getElementById("SelectDataPoints");
+		ElementColumnSelect.options.length = 0;
+		for(let i = 0; i < ListColumns.length; i++){
+			let Option = document.createElement("option");
+			Option.value = i;
+			Option.innerHTML = ListColumns[i];
+			ElementColumnSelect.appendChild(Option);
+		}
+		DataLoaded = true;
+		PlaybackEnable = true;
+		Update = true;
+	};
+	reader.readAsText(input.files[0]);
+}
+
+function ModeSwitch(){
+	Update = false;
+	PlaybackEnable = false;
+	Reinitialize = true;
+	let Button = document.getElementById("ButtonMode");
+	for(let i = 0; i < ModeString.length; i++){
+		if(Button.innerHTML == ModeString[i]){
+			i++;
+			if(i >= ModeString.length){
+				i = 0;
+			}
+			Mode = i;
+			Button.innerHTML = ModeString[i];
+			switch(ModeString[Mode]){
+				case "Live":
+					break;
+				case "Playback":
+					Context.clearRect(0, 0, Canvas.width, Canvas.height);
+					LiveData = new DI914();
+					LiveData.ColumnList(RecordedData.ColumnList());
+					PlaybackInterval = RecordedData.Column(1);
+					for(let i = 0; i < PlaybackInterval.length; i++){
+						let TimeElement = PlaybackInterval[i].split(":");
+						PlaybackInterval[i] = (parseInt(TimeElement[0]) * 3600 + parseInt(TimeElement[1]) * 60 + parseInt(TimeElement[2].split(".")[0])) * 1000 + parseInt(TimeElement[2].split(".")[1]);
+					}
+					for(let i = 0; i < PlaybackInterval.length - 1; i++){
+						PlaybackInterval[i] = PlaybackInterval[i + 1] - PlaybackInterval[i];
+					}
+					PlaybackInterval.pop();
+					StepIndex = 0;
+					PlaybackTime = 0;
+					PlaybackEnable = true;
+					setTimeout(Step, 50);
+					break;
+				case "Recorded":
+					Time = RecordedData.Column(RecordedData.ColumnIndex("Time (UTC)"));
+					break;
+				default:
+					break;
+			}
+			break;
+		}
+	}
+	Update = true;
+}
+
+function MouseEnterCanvas(E){
+	CanvasGraphMouse = true;
+}
+
+function MouseLeaveCanvas(E){
+	CanvasGraphMouse = false;
+}
+
+function MouseMoveCanvas(E){
+	MouseX = E.offsetX;
+	MouseY = E.offsetY;
+}
+
+function SelectDataPoint(E){
+	
+}
+
+function SpeedSwitch(Obj){
+	switch(Obj.id){
+		case "ButtonSpeed05":
+			PlaybackSpeed = 0.5;
+			break;
+		case "ButtonSpeed1":
+			PlaybackSpeed = 1;
+			break;
+		case "ButtonSpeed2":
+			PlaybackSpeed = 2;
+			break;
+		case "ButtonSpeed4":
+			PlaybackSpeed = 4;
+			break;
+		case "ButtonSpeed8":
+			PlaybackSpeed = 8;
+			break;
+		default:
+			break;
+	}
+}
+
+function Step(){
+	if(DataLoaded && PlaybackEnable){
+		LiveData.RowInsert(RecordedData.Row(StepIndex));
+		StepIndex++;
+		PlaybackTime = PlaybackTime + PlaybackInterval[StepIndex];
+		if(StepIndex < RecordedData.RowCount()){
+			Update = true;
+			setTimeout(Step, PlaybackInterval[StepIndex - 1] / PlaybackSpeed);
+		}
+	}
+}
+</script>
+
+	<style>
+		/* Style the tab */
+		.TabContainer {
+			overflow: hidden;
+			border: 1px solid #ccc;
+			background-color: #f1f1f1;
+		}
+
+		/* Style the buttons that are used to open the tab content */
+		.TabContainer button {
+			background-color: inherit;
+			float: left;
+			border: none;
+			outline: none;
+			cursor: pointer;
+			padding: 14px 16px;
+			transition: 0.3s;
+		}
+
+		/* Change background color of buttons on hover */
+		.TabContainer button:hover {
+			background-color: #ddd;
+		}
+
+		/* Create an active/current tablink class */
+		.TabContainer button.active {
+			background-color: #ccc;
+		}
+
+		/* Style the tab content */
+		.TabContent {
+			display: none;
+			padding: 6px 12px;
+			border: 1px solid #ccc;
+			border-top: none;
+		}
+		
+		.InputError{
+		
+		}
+		
+		.InputValid{
+		
+		}
+	</style>
+
+	<canvas id="CanvasGraph" onmouseenter="MouseEnterCanvas(event)" onmouseleave="MouseLeaveCanvas(event)" onmousemove="MouseMoveCanvas(event)" width="1900" height="600" style="border:1px solid grey"></canvas>
+	
+	<input type='file' id="DBSelect" accept='text/plain' onchange="DatabaseLoad(event)"><br>
+	<div id='output'>
+		...
+	</div>
+	
+	<div>
+		<div>
+			<button id="ButtonMode" type="button" onclick="ModeSwitch()">Recorded</button>
+			<button id="ButtonSpeed05" type="button" onclick="SpeedSwitch(this)">0.5</button>
+			<button id="ButtonSpeed1" type="button" onclick="SpeedSwitch(this)">1.0</button>
+			<button id="ButtonSpeed2" type="button" onclick="SpeedSwitch(this)">2.0</button>
+			<button id="ButtonSpeed4" type="button" onclick="SpeedSwitch(this)">4.0</button>
+			<button id="ButtonSpeed8" type="button" onclick="SpeedSwitch(this)">8.0</button>
+		</div>
+		<div>
+			<div id="PlaybackTime"></div>
+			<div id="BoundsDisplay"></div>
+			<div id="ScaleDisplay"></div>
+		</div>
+		<div>
+			<label for="SelectDataPoints">Data Points</label>
+			<select id="SelectDataPoints" onchange="SelectDataPoint(event)">
+			</select>
+			<button id="ButtonDataAdd" type="button" onclick="ButtonDataPointAdd()">Add Datapoint</button>
+		</div>
+	</div>
+	
+</body>
+</head>
+</html>
